@@ -1,6 +1,6 @@
 # use-case-aquamonitor
 
-## Build docker container
+## Build docker image
 
 	cd notebooks
 	docker build -t openeo .
