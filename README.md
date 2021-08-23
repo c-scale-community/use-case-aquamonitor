@@ -1,5 +1,9 @@
 # use-case-aquamonitor
 
+## Architecture
+
+[architecture](./img/C_Scale_Aquamonitor.svg)
+
 ## Build docker image
 
 	cd notebooks
