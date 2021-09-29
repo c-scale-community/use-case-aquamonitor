@@ -7,16 +7,15 @@
 ## Build docker image
 
 ```
-cd notebooks
-docker build -t openeo .
+docker build -t aquamonitor .
 ```
 
 ## Run docker container
 ```
-docker run -p 8889:8889 -v <notebooks path>:/data openeo
+docker run -p 8888:8888 -v $(pwd):/home/jovyan/work aquamonitor
 ```
 
 ## Run Notebook
 
 Copy the output from the docker run command in your browser:
-http://127.0.0.1:8889/?token=xxx
+http://127.0.0.1:8888/?token=xxx
