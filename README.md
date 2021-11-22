@@ -6,12 +6,14 @@
 
 ## Build docker image
 
-	cd notebooks
-	docker build -t openeo .
+```
+docker build -t aquamonitor .
+```
 
 ## Run docker container
-
-	docker run -p 8888:8888 -v <notebooks path>:/data openeo
+```
+docker run -p 8888:8888 -v $(pwd):/home/jovyan/work aquamonitor
+```
 
 ## Run Notebook
 
