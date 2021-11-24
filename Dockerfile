@@ -4,7 +4,7 @@ USER root
 
 COPY ./requirements.txt ${HOME}/requirements.txt
 
-RUN pip install -r requirements.txt --no-cache-dir \
+RUN pip install -r requirements.txt --no-cache-dir --ignore-installed \
  && jupyter labextension install \
     @jupyterlab/debugger \
     @jupyterlab/toc \
