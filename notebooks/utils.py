@@ -10,6 +10,18 @@ from openeo.rest.job import RESTJob
 
 
 def get_files_from_dc(dc: DataCube, out_directory: Path, name: str = "aquamonitor") -> List[Path]:
+    """
+    Creates an asynchronous job for a datacube, polls the job progress and returns a list of paths
+    to the netcdf results once finished. 
+    
+    args:
+        dc (DataCube): DataCube that needs to be resolved.
+        out_directory (Path): directory where the netcdf files will be stored.
+        name (str): name of the job in the openeo backend.
+    
+    returns:
+        List[Paths]: list of paths which point to the results.
+    """
     def wait(
         print: Callable = print,
         max_poll_interval: int = 60,
@@ -17,6 +29,16 @@ def get_files_from_dc(dc: DataCube, out_directory: Path, name: str = "aquamonito
         soft_error_max: int = 10,
         start_time: [Optional[datetime]] = None
     ) -> RESTJob:
+        """
+        Poll the job until it is completed. Also use the refresh token if needed.
+        
+        args:
+            print (Callable): callable to print output.
+            max_poll_interval (int): number of seconds that the poll uses at maximum.
+            connection_retry_interval (int): number of seconds to wait after a soft error.
+            soft_error_max (int): maximum number of soft errors to tolerate before timing out.
+            start_time (datetime): time at which the polling starts.
+        """
         if start_time is None:
             start_time: datetime = time()
         # Dirty copy-pasta from python client source code
