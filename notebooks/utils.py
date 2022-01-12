@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+import logging
 from pathlib import Path
 from requests import ConnectionError
 from time import sleep, time
@@ -6,24 +7,40 @@ from typing import Callable, List, Optional
 
 from openeo.rest import OpenEoApiError, JobFailedException
 from openeo.rest.datacube import DataCube
-from openeo.rest.job import RESTJob
+from openeo.rest.job import RESTJob, JobResults
 
 
-def get_files_from_dc(dc: DataCube, out_directory: Path, name: str = "aquamonitor") -> List[Path]:
+# Initiate logger
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+fh = logging.FileHandler('batch.log', mode="a")
+ch = logging.StreamHandler()
+fh.setLevel(logging.INFO)
+ch.setLevel(logging.INFO)
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+fh.setFormatter(formatter)
+ch.setFormatter(formatter)
+logger.addHandler(fh)
+logger.addHandler(ch)
+
+
+def get_results_from_dc(
+    dc: DataCube,
+    job_name: str = "aquamonitor",
+    format: str = "NetCDF"
+) -> JobResults:
     """
-    Creates an asynchronous job for a datacube, polls the job progress and returns a list of paths
-    to the netcdf results once finished. 
-    
+    Creates an asynchronous job for a datacube, polls the job progress and return the result assets.
     args:
         dc (DataCube): DataCube that needs to be resolved.
-        out_directory (Path): directory where the netcdf files will be stored.
-        name (str): name of the job in the openeo backend.
+        job_name (str): name of the job in the openeo backend.
+        format (str): format of the result saves in the OpenEO backend.
     
-    returns:
-        List[Paths]: list of paths which point to the results.
+    return:
+        (JobResults) results object of the job
     """
+    
     def wait(
-        print: Callable = print,
         max_poll_interval: int = 60,
         connection_retry_interval: int = 30,
         soft_error_max: int = 10,
@@ -33,7 +50,6 @@ def get_files_from_dc(dc: DataCube, out_directory: Path, name: str = "aquamonito
         Poll the job until it is completed. Also use the refresh token if needed.
         
         args:
-            print (Callable): callable to print output.
             max_poll_interval (int): number of seconds that the poll uses at maximum.
             connection_retry_interval (int): number of seconds to wait after a soft error.
             soft_error_max (int): maximum number of soft errors to tolerate before timing out.
@@ -46,7 +62,7 @@ def get_files_from_dc(dc: DataCube, out_directory: Path, name: str = "aquamonito
             return str(timedelta(seconds=time() - start_time)).rsplit(".")[0]
 
         def print_status(msg: str):
-            print("{t} Job {i!r}: {m}".format(t=elapsed(), i=job.job_id, m=msg))
+            logger.info("{t} Job {i!r}: {m}".format(t=elapsed(), i=job.job_id, m=msg))
 
         # Start with fast polling.
         poll_interval = min(5, max_poll_interval)
@@ -93,17 +109,62 @@ def get_files_from_dc(dc: DataCube, out_directory: Path, name: str = "aquamonito
                 i=job.job_id, s=status, t=elapsed()
             ), job=job)
            
-    dc: DataCube = dc.save_result(format="NetCDF")  # Add save result step to the end of the graph
-    job: RESTJob = dc._connection.create_job(process_graph=dc.flat_graph(), title=name)
+    dc: DataCube = dc.save_result(format=format)  # Add save result step to the end of the graph
+    job: RESTJob = dc._connection.create_job(process_graph=dc.flat_graph(), title=job_name)
     start_time: datetime = time()
     job.start_job()
     wait(start_time=start_time, soft_error_max=50)
     
-    files: List[Path] = []
+    return job.get_results()
 
-    results: JobResults = job.get_results()
+def get_files_from_dc(
+    dc: DataCube,
+    out_directory: Path,
+    job_name: str = "aquamonitor",
+    format: str = "NetCDF"
+) -> List[Path]:
+    """
+    Creates an asynchronous job for a datacube, polls the job progress and returns a list of paths
+    to the results once finished. 
+    
+    args:
+        dc (DataCube): DataCube that needs to be resolved.
+        out_directory (Path): directory where the files will be stored.
+        job_name (str): name of the job in the openeo backend.
+        format (str): format of the result saves in the OpenEO backend.
+    
+    returns:
+        List[Paths]: list of paths which point to the results.
+    """
+    
+    files: List[Path] = []
+    
+    results: JobResults = get_results_from_dc(dc, job_name, format)
+
     for asset in results.get_assets():
         if asset.metadata["type"].startswith("application/x-netcdf"):
             file: Path = asset.download(out_directory / asset.name, chunk_size=2 * 1024 * 1024)
             files.append(file)
     return files
+
+def get_urls_from_dc(
+    dc: DataCube,
+    job_name: str = "aquamonitor",
+    format: str = "NetCDF",
+) -> List[str]:
+    """
+    Creates an asynchronous job for a datacube, polls the job progress and returns a list of
+    download urls once the job has finished.
+    
+    args:
+        dc (DataCube): DataCube that needs to be resolved.
+        job_name (str): name of the job in the openeo backend.
+        format (str): format of the result saves in the OpenEO backend.
+    
+    returns:
+        List[str]: list of download_urls which point to the results.
+    """
+    
+    results: JobResults = get_results_from_dc(dc, job_name, format)
+    
+    return [asset.href for asset in results.get_assets()]
