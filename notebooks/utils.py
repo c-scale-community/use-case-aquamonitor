@@ -1,10 +1,13 @@
 from datetime import datetime, timedelta
+from dateutil.parser import parse
+from functools import reduce
 import logging
 from pathlib import Path
 from requests import ConnectionError
 from time import sleep, time
-from typing import Callable, List, Optional
+from typing import Callable, Dict, List, Optional
 
+from openeo.internal.jupyter import VisualList
 from openeo.rest import OpenEoApiError, JobFailedException
 from openeo.rest.datacube import DataCube
 from openeo.rest.job import RESTJob, JobResults
@@ -24,11 +27,11 @@ logger.addHandler(fh)
 logger.addHandler(ch)
 
 
-def get_results_from_dc(
+def start_and_wait(
     dc: DataCube,
     job_name: str = "aquamonitor",
-    format: str = "NetCDF"
-) -> JobResults:
+    format: str = "NetCDF",
+) -> RESTJob:
     """
     Creates an asynchronous job for a datacube, polls the job progress and return the result assets.
     args:
@@ -108,14 +111,15 @@ def get_results_from_dc(
             raise JobFailedException("Batch job {i} didn't finish properly. Status: {s} (after {t}).".format(
                 i=job.job_id, s=status, t=elapsed()
             ), job=job)
-           
+
     dc: DataCube = dc.save_result(format=format)  # Add save result step to the end of the graph
+    
     job: RESTJob = dc._connection.create_job(process_graph=dc.flat_graph(), title=job_name)
     start_time: datetime = time()
     job.start_job()
     wait(start_time=start_time, soft_error_max=50)
     
-    return job.get_results()
+    return job
 
 def get_files_from_dc(
     dc: DataCube,
@@ -139,10 +143,11 @@ def get_files_from_dc(
     
     files: List[Path] = []
     
-    results: JobResults = get_results_from_dc(dc, job_name, format)
+    results: JobResults = start_and_wait(dc, job_name, format).get_results()
 
     for asset in results.get_assets():
-        if asset.metadata["type"].startswith("application/x-netcdf"):
+        meta_type: str = asset.metadata["type"]
+        if meta_type.startswith("application/x-netcdf") or meta_type.startswith("image/tiff"):
             file: Path = asset.download(out_directory / asset.name, chunk_size=2 * 1024 * 1024)
             files.append(file)
     return files
@@ -165,6 +170,40 @@ def get_urls_from_dc(
         List[str]: list of download_urls which point to the results.
     """
     
-    results: JobResults = get_results_from_dc(dc, job_name, format)
+    results: JobResults = start_and_wait(dc, job_name, format).get_results()
     
     return [asset.href for asset in results.get_assets()]
+
+def get_cache(dc: DataCube, title: str) -> Optional[DataCube]:
+    def get_latest_completed_job(jobs: VisualList, title: str) -> Optional[Dict[str, str]]:
+        if not any(jobs):  # if not jobs exist yet in this backend
+            return None
+        match_jobs: filter = filter(lambda job: job["title"] == title and job["status"] == "finished", jobs)
+        m = next(match_jobs, None)  # Check if filter object emtpy
+        if not m:
+            return m
+        return reduce(lambda j1, j2: j1 if j1["updated"] > j2["updated"] else j2, match_jobs, m)
+
+    # If we have a job with a result already, return
+    jobs: VisualList = dc._connection.list_jobs()
+    job: Optional[Dict[str, str]] = get_latest_completed_job(jobs, title)
+    if job:
+        return dc._connection.load_result(job["id"])
+    return None
+    
+def get_or_create_cache(
+    dc: DataCube,
+    job_name: str = "aquamonitor",
+    format: str = "NetCDF"
+) -> DataCube:
+    """
+    Get or create a cache from a DataCube. Data is cached at the current backend and is identified by the
+    job title and getting the latest successful job.
+    """
+    cache: Optional[DataCube] = get_cache(dc, job_name)
+    if cache:
+        return cache
+    else:
+        job: RESTJob = start_and_wait(dc, job_name, format)
+        return dc._connection.load_result(job.job_id)
+        

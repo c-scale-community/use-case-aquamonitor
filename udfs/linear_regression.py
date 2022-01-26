@@ -26,5 +26,5 @@ def apply_datacube(cube: XarrayDataCube, context: dict) -> XarrayDataCube:
     slope: DataSet = fit.isel(degree=1)
 
     return XarrayDataCube(
-        array=DataArray(slope["polyfit_coefficients"], dims=slope.dims, coords=slope.coords)
+        array=DataArray(slope["polyfit_coefficients"]) # , dims=slope.dims, coords=slope.coords)
     )
