@@ -3,6 +3,7 @@ from dateutil.parser import parse
 from functools import reduce
 import logging
 from pathlib import Path
+import re
 from requests import ConnectionError
 from time import sleep, time
 from typing import Callable, Dict, List, Optional
@@ -27,17 +28,27 @@ logger.addHandler(fh)
 logger.addHandler(ch)
 
 
+def get_latest_completed_job(jobs: VisualList, title: str) -> Optional[Dict[str, str]]:
+        if not any(jobs):  # if not jobs exist yet in this backend
+            return None
+            
+        match_jobs: filter = filter(lambda job: job.get("title") == title and job.get("status") == "finished", jobs)
+        m = next(match_jobs, None)  # Check if filter object emtpy
+        if not m:
+            return m
+        return reduce(lambda j1, j2: j1 if j1["updated"] > j2["updated"] else j2, match_jobs, m)
+
 def start_and_wait(
     dc: DataCube,
     job_name: str = "aquamonitor",
-    format: str = "NetCDF",
+    result_format: str = "NetCDF"
 ) -> RESTJob:
     """
     Creates an asynchronous job for a datacube, polls the job progress and return the result assets.
     args:
         dc (DataCube): DataCube that needs to be resolved.
         job_name (str): name of the job in the openeo backend.
-        format (str): format of the result saves in the OpenEO backend.
+        result_format (str): format of the result saves in the OpenEO backend.
     
     return:
         (JobResults) results object of the job
@@ -112,7 +123,7 @@ def start_and_wait(
                 i=job.job_id, s=status, t=elapsed()
             ), job=job)
 
-    dc: DataCube = dc.save_result(format=format)  # Add save result step to the end of the graph
+    dc: DataCube = dc.save_result(format=result_format)  # Add save result step to the end of the graph
     
     job: RESTJob = dc._connection.create_job(process_graph=dc.flat_graph(), title=job_name)
     start_time: datetime = time()
@@ -121,11 +132,34 @@ def start_and_wait(
     
     return job
 
+def get_or_create_results(dc: DataCube, job_name: str, recalculate: bool, result_format: str) -> JobResults:
+    """
+    args:
+        dc (DataCube): DataCube that needs to be resolved.
+        job_name (str): name of the job in the openeo backend.
+        recalculate (bool): whether to search for previous results or recalculate.
+    
+    returns:
+        JobResults: results of the cached or created job.
+    """
+    
+    results = None
+    if not recalculate:
+        job: Optional[Dict[str, str]] = get_latest_completed_job(dc._connection.list_jobs(), job_name)
+        if job:
+            results: JobResults = RESTJob(job["id"], dc._connection).get_results()
+    if not results:
+        results: JobResults = start_and_wait(dc, job_name, result_format).get_results()
+        
+    return results
+    
+
 def get_files_from_dc(
     dc: DataCube,
     out_directory: Path,
     job_name: str = "aquamonitor",
-    format: str = "NetCDF"
+    result_format: str = "NetCDF",
+    recalculate: bool = True
 ) -> List[Path]:
     """
     Creates an asynchronous job for a datacube, polls the job progress and returns a list of paths
@@ -135,16 +169,16 @@ def get_files_from_dc(
         dc (DataCube): DataCube that needs to be resolved.
         out_directory (Path): directory where the files will be stored.
         job_name (str): name of the job in the openeo backend.
-        format (str): format of the result saves in the OpenEO backend.
+        result_format (str): format of the result saves in the OpenEO backend.
+        recalculate (bool): whether to search for previous results or recalculate.
     
     returns:
         List[Paths]: list of paths which point to the results.
     """
     
-    files: List[Path] = []
+    results: JobResults = get_or_create_results(dc, job_name, recalculate, result_format)
     
-    results: JobResults = start_and_wait(dc, job_name, format).get_results()
-
+    files: List[Path] = []
     for asset in results.get_assets():
         meta_type: str = asset.metadata["type"]
         if meta_type.startswith("application/x-netcdf") or meta_type.startswith("image/tiff"):
@@ -155,7 +189,8 @@ def get_files_from_dc(
 def get_urls_from_dc(
     dc: DataCube,
     job_name: str = "aquamonitor",
-    format: str = "NetCDF",
+    result_format: str = "NetCDF",
+    recalculate: bool = True
 ) -> List[str]:
     """
     Creates an asynchronous job for a datacube, polls the job progress and returns a list of
@@ -164,25 +199,28 @@ def get_urls_from_dc(
     args:
         dc (DataCube): DataCube that needs to be resolved.
         job_name (str): name of the job in the openeo backend.
-        format (str): format of the result saves in the OpenEO backend.
+        result_format (str): format of the result saves in the OpenEO backend.
+        recalculate (bool): whether to search for previous results or recalculate.
     
     returns:
         List[str]: list of download_urls which point to the results.
     """
     
-    results: JobResults = start_and_wait(dc, job_name, format).get_results()
+    results: JobResults = get_or_create_results(dc, job_name, recalculate, result_format)
     
     return [asset.href for asset in results.get_assets()]
 
 def get_cache(dc: DataCube, title: str) -> Optional[DataCube]:
-    def get_latest_completed_job(jobs: VisualList, title: str) -> Optional[Dict[str, str]]:
-        if not any(jobs):  # if not jobs exist yet in this backend
-            return None
-        match_jobs: filter = filter(lambda job: job["title"] == title and job["status"] == "finished", jobs)
-        m = next(match_jobs, None)  # Check if filter object emtpy
-        if not m:
-            return m
-        return reduce(lambda j1, j2: j1 if j1["updated"] > j2["updated"] else j2, match_jobs, m)
+    """
+    Get cached result from backend.
+    
+    args:
+        dc (DataCube): DataCube that needs to be checked.
+        title (str): Title of the job that will be assesed.
+        
+    returns:
+        Optional[DataCube]: DataCube if there is any matching the job.
+    """
 
     # If we have a job with a result already, return
     jobs: VisualList = dc._connection.list_jobs()
@@ -194,7 +232,7 @@ def get_cache(dc: DataCube, title: str) -> Optional[DataCube]:
 def get_or_create_cache(
     dc: DataCube,
     job_name: str = "aquamonitor",
-    format: str = "NetCDF"
+    result_format: str = "NetCDF"
 ) -> DataCube:
     """
     Get or create a cache from a DataCube. Data is cached at the current backend and is identified by the
@@ -204,6 +242,6 @@ def get_or_create_cache(
     if cache:
         return cache
     else:
-        job: RESTJob = start_and_wait(dc, job_name, format)
-        return dc._connection.load_result(job.job_id)
+        job: RESTJob = start_and_wait(dc, job_name, result_format)
+        return dc._connection.load_result(re.sub(r'vito', r'', job.job_id))  # Temp workaround for broken backend
         
