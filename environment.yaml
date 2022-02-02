@@ -12,6 +12,7 @@ dependencies:
   - pandas=1.3.*
   - pip
   - pyproj
+  - rasterio
   - rioxarray
   - shapely<1.8.0  # No warnings for cartopy
   - pip:
