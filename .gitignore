@@ -2,3 +2,6 @@
 .vscode
 .python-version
 **/.ipynb_checkpoints/*
+**/__pycache__/*
+notebooks/plotting/*
+*.log

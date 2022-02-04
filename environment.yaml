@@ -1,0 +1,19 @@
+name: py37
+channels:
+  - conda-forge
+  - pyviz
+dependencies:
+  - cartopy
+  - geoviews
+  - hvplot
+  - jupyterlab
+  - matplotlib
+  - netCDF4=1.5.8
+  - pandas=1.3.*
+  - pip
+  - pyproj
+  - rasterio
+  - rioxarray
+  - shapely<1.8.0  # No warnings for cartopy
+  - pip:
+    - openeo
