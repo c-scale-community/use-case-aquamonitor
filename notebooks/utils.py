@@ -2,11 +2,10 @@ from copy import deepcopy
 from functools import reduce
 import logging
 from pathlib import Path
-import re
 from typing import Dict, List, Optional, Tuple
 
 from openeo.internal.jupyter import VisualList
-from openeo.metadata import Band, BandDimension, CollectionMetadata, TemporalDimension, SpatialDimension
+from openeo.metadata import Band, CollectionMetadata
 from openeo.rest.datacube import DataCube
 from openeo.rest.job import JobResults
 
@@ -53,11 +52,12 @@ def get_or_create_results(
     returns:
         JobResults: results of the cached or created job.
     """
+
+    if not local_cache_file and not recalculate:
+        raise RuntimeError("must specify either recalculate=True or local_cache_file")
     
     results: Optional[JobResults] = None
     dc: DataCube = dc.save_result(format=result_format)  # add save result to backend
-    import json
-    logger.info(f"flat_graph: \n{json.dumps(dc.flat_graph())}")
     job: CachedJob = CachedJob(job_name, local_cache_file, connection=dc._connection, flat_graph=dc.flat_graph())
     if not recalculate:
         if job.status() == "finished":
@@ -73,7 +73,8 @@ def get_files_from_dc(
     out_directory: Path,
     job_name: str = "aquamonitor",
     result_format: str = "NetCDF",
-    recalculate: bool = True
+    recalculate: bool = True,
+    local_cache_file: Optional[Path] = None
 ) -> List[Path]:
     """
     Creates an asynchronous job for a datacube, polls the job progress and returns a list of paths
@@ -90,7 +91,7 @@ def get_files_from_dc(
         List[Paths]: list of paths which point to the results.
     """
     
-    results: JobResults = get_or_create_results(dc, job_name, recalculate, result_format)
+    results: JobResults = get_or_create_results(dc, job_name, recalculate, result_format, local_cache_file)
     
     files: List[Path] = []
     for asset in results.get_assets():
@@ -104,7 +105,8 @@ def get_urls_from_dc(
     dc: DataCube,
     job_name: str = "aquamonitor",
     result_format: str = "NetCDF",
-    recalculate: bool = True
+    recalculate: bool = True,
+    local_cache_file: Optional[Path] = None
 ) -> List[str]:
     """
     Creates an asynchronous job for a datacube, polls the job progress and returns a list of
@@ -120,7 +122,7 @@ def get_urls_from_dc(
         List[str]: list of download_urls which point to the results.
     """
     
-    results: JobResults = get_or_create_results(dc, job_name, recalculate, result_format)
+    results: JobResults = get_or_create_results(dc, job_name, recalculate, result_format, local_cache_file)
     
     return [asset.href for asset in results.get_assets()]
 
@@ -152,6 +154,10 @@ def get_cache(
 
     # Set metadata based on previous metadata with matching spatial and temporal extents
     bands: List[Band] = deepcopy(cached_cube.metadata).band_dimension.bands
+
+    loaded_cube = loaded_cube \
+        .add_dimension("spectral", "some_label", type="bands") \
+        .rename_labels("spectral", list(map(lambda band: band.name, bands)))
 
     def get_band_meta_dict(b: Band):
         return { 
@@ -186,8 +192,6 @@ def get_cache(
             "eo:bands": list(map(lambda band: get_band_meta_dict(band), bands))
         }
     })
-
-    print(m)
 
     # # Set metadata based on previous metadata with matching spatial and temporal extents
     # m: CollectionMetadata = deepcopy(cached_cube.metadata)
