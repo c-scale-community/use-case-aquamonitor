@@ -1,18 +1,15 @@
-from datetime import datetime, timedelta
-from dateutil.parser import parse
+from copy import deepcopy
 from functools import reduce
 import logging
 from pathlib import Path
-import re
-from requests import ConnectionError
-from time import sleep, time
-from typing import Callable, Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from openeo.internal.jupyter import VisualList
-from openeo.rest import OpenEoApiError, JobFailedException
+from openeo.metadata import Band, CollectionMetadata
 from openeo.rest.datacube import DataCube
-from openeo.rest.job import RESTJob, JobResults
+from openeo.rest.job import JobResults
 
+from cached_job import CachedJob
 
 # Initiate logger
 logger = logging.getLogger(__name__)
@@ -29,127 +26,44 @@ logger.addHandler(ch)
 
 
 def get_latest_completed_job(jobs: VisualList, title: str) -> Optional[Dict[str, str]]:
-        if not any(jobs):  # if not jobs exist yet in this backend
-            return None
-            
-        match_jobs: filter = filter(lambda job: job.get("title") == title and job.get("status") == "finished", jobs)
-        m = next(match_jobs, None)  # Check if filter object emtpy
-        if not m:
-            return m
-        return reduce(lambda j1, j2: j1 if j1["updated"] > j2["updated"] else j2, match_jobs, m)
-
-def start_and_wait(
-    dc: DataCube,
-    job_name: str = "aquamonitor",
-    result_format: str = "NetCDF"
-) -> RESTJob:
-    """
-    Creates an asynchronous job for a datacube, polls the job progress and return the result assets.
-    args:
-        dc (DataCube): DataCube that needs to be resolved.
-        job_name (str): name of the job in the openeo backend.
-        result_format (str): format of the result saves in the OpenEO backend.
-    
-    return:
-        (JobResults) results object of the job
-    """
-    
-    def wait(
-        max_poll_interval: int = 60,
-        connection_retry_interval: int = 30,
-        soft_error_max: int = 10,
-        start_time: [Optional[datetime]] = None
-    ) -> RESTJob:
-        """
-        Poll the job until it is completed. Also use the refresh token if needed.
+    if not any(jobs):  # if not jobs exist yet in this backend
+        return None
         
-        args:
-            max_poll_interval (int): number of seconds that the poll uses at maximum.
-            connection_retry_interval (int): number of seconds to wait after a soft error.
-            soft_error_max (int): maximum number of soft errors to tolerate before timing out.
-            start_time (datetime): time at which the polling starts.
-        """
-        if start_time is None:
-            start_time: datetime = time()
-        # Dirty copy-pasta from python client source code
-        def elapsed() -> str:
-            return str(timedelta(seconds=time() - start_time)).rsplit(".")[0]
+    match_jobs: filter = filter(lambda job: job.get("title") == title and job.get("status") == "finished", jobs)
+    m = next(match_jobs, None)  # Check if filter object emtpy
+    if not m:
+        return m
+    return reduce(lambda j1, j2: j1 if j1["updated"] > j2["updated"] else j2, match_jobs, m)
 
-        def print_status(msg: str):
-            logger.info("{t} Job {i!r}: {m}".format(t=elapsed(), i=job.job_id, m=msg))
-
-        # Start with fast polling.
-        poll_interval = min(5, max_poll_interval)
-        status = None
-        _soft_error_count = 0
-
-        def soft_error(message: str):
-            """Non breaking error (unless we had too much of them)"""
-            nonlocal _soft_error_count
-            _soft_error_count += 1
-            if _soft_error_count > soft_error_max:
-                raise OpenEoClientException("Excessive soft errors")
-            print_status(message)
-            sleep(connection_retry_interval)
-
-        while True:
-            # TODO: also allow a hard time limit on this infinite poll loop?
-            try:
-                job_info = job.describe_job()
-            except ConnectionError as e:
-                soft_error("Connection error while polling job status: {e}".format(e=e))
-                continue
-            except OpenEoApiError as e:
-                if e.http_status_code == 503:
-                    soft_error("Service availability error while polling job status: {e}".format(e=e))
-                    continue
-                elif e.http_status_code == 403:
-                    dc._connection.authenticate_oidc()  # Make sure we do not timeout during the wait
-                else:
-                    raise
-
-            status = job_info.get("status", "N/A")
-            progress = '{p}%'.format(p=job_info["progress"]) if "progress" in job_info else "N/A"
-            print_status("{s} (progress {p})".format(s=status, p=progress))
-            if status not in ('submitted', 'created', 'queued', 'running'):
-                break
-
-            # Sleep for next poll (and adaptively make polling less frequent)
-            sleep(poll_interval)
-            poll_interval = min(1.25 * poll_interval, max_poll_interval)
-
-        if status != "finished":
-            raise JobFailedException("Batch job {i} didn't finish properly. Status: {s} (after {t}).".format(
-                i=job.job_id, s=status, t=elapsed()
-            ), job=job)
-
-    dc: DataCube = dc.save_result(format=result_format)  # Add save result step to the end of the graph
-    
-    job: RESTJob = dc._connection.create_job(process_graph=dc.flat_graph(), title=job_name)
-    start_time: datetime = time()
-    job.start_job()
-    wait(start_time=start_time, soft_error_max=50)
-    
-    return job
-
-def get_or_create_results(dc: DataCube, job_name: str, recalculate: bool, result_format: str) -> JobResults:
+def get_or_create_results(
+    dc: DataCube,
+    job_name: str,
+    recalculate: bool,
+    result_format: str,
+    local_cache_file: Optional[Path] = None
+) -> JobResults:
     """
     args:
         dc (DataCube): DataCube that needs to be resolved.
         job_name (str): name of the job in the openeo backend.
         recalculate (bool): whether to search for previous results or recalculate.
+        local_cache_file (Optional[Path]): file where jobs are cached.
     
     returns:
         JobResults: results of the cached or created job.
     """
+
+    if not local_cache_file and not recalculate:
+        raise RuntimeError("must specify either recalculate=True or local_cache_file")
     
-    results = None
+    results: Optional[JobResults] = None
+    dc: DataCube = dc.save_result(format=result_format)  # add save result to backend
+    job: CachedJob = CachedJob(job_name, local_cache_file, connection=dc._connection, flat_graph=dc.flat_graph())
     if not recalculate:
-        job: Optional[Dict[str, str]] = get_latest_completed_job(dc._connection.list_jobs(), job_name)
-        if job:
-            results: JobResults = RESTJob(job["id"], dc._connection).get_results()
+        if job.status() == "finished":
+            results: JobResults = job.get_results()
     if not results:
-        results: JobResults = start_and_wait(dc, job_name, result_format).get_results()
+        results: JobResults = job.start_and_wait().get_results()
         
     return results
     
@@ -159,7 +73,8 @@ def get_files_from_dc(
     out_directory: Path,
     job_name: str = "aquamonitor",
     result_format: str = "NetCDF",
-    recalculate: bool = True
+    recalculate: bool = True,
+    local_cache_file: Optional[Path] = None
 ) -> List[Path]:
     """
     Creates an asynchronous job for a datacube, polls the job progress and returns a list of paths
@@ -176,7 +91,7 @@ def get_files_from_dc(
         List[Paths]: list of paths which point to the results.
     """
     
-    results: JobResults = get_or_create_results(dc, job_name, recalculate, result_format)
+    results: JobResults = get_or_create_results(dc, job_name, recalculate, result_format, local_cache_file)
     
     files: List[Path] = []
     for asset in results.get_assets():
@@ -190,7 +105,8 @@ def get_urls_from_dc(
     dc: DataCube,
     job_name: str = "aquamonitor",
     result_format: str = "NetCDF",
-    recalculate: bool = True
+    recalculate: bool = True,
+    local_cache_file: Optional[Path] = None
 ) -> List[str]:
     """
     Creates an asynchronous job for a datacube, polls the job progress and returns a list of
@@ -206,31 +122,103 @@ def get_urls_from_dc(
         List[str]: list of download_urls which point to the results.
     """
     
-    results: JobResults = get_or_create_results(dc, job_name, recalculate, result_format)
+    results: JobResults = get_or_create_results(dc, job_name, recalculate, result_format, local_cache_file)
     
     return [asset.href for asset in results.get_assets()]
 
-def get_cache(dc: DataCube, title: str) -> Optional[DataCube]:
+def get_cache(
+    cached_cube: DataCube,
+    job: CachedJob,
+    temporal_extent: Tuple[str, str],
+    spatial_extent: Dict[str, Tuple[float]],
+    reference_system: int = 4326
+) -> Optional[DataCube]:
     """
     Get cached result from backend.
     
     args:
-        dc (DataCube): DataCube that needs to be checked.
-        title (str): Title of the job that will be assesed.
+        cached_cube (DataCube): cached DataCube containing DAG and old metadata.
+        job (CachedJob): job cached locally.
+        temporal_extent (List): list containing start date and end date (or None if present) of
+            cached_cube.
+        spatial_extent (Dict): dictionary containing extents of x and y coordinates.
         
     returns:
         Optional[DataCube]: DataCube if there is any matching the job.
     """
 
-    # If we have a job with a result already, return
-    jobs: VisualList = dc._connection.list_jobs()
-    job: Optional[Dict[str, str]] = get_latest_completed_job(jobs, title)
-    if job:
-        return dc._connection.load_result(job["id"])
-    return None
+    loaded_cube: DataCube = cached_cube._connection.load_result(
+        # id=re.sub(r"vito", r"", job.job_id)  # Temp workaround for broken backend
+        id=job.job_id
+    )
+
+    # Set metadata based on previous metadata with matching spatial and temporal extents
+    bands: List[Band] = deepcopy(cached_cube.metadata).band_dimension.bands
+
+    loaded_cube = loaded_cube \
+        .add_dimension("spectral", "some_label", type="bands") \
+        .rename_labels("spectral", list(map(lambda band: band.name, bands)))
+
+    def get_band_meta_dict(b: Band):
+        return { 
+            "name": b.name,
+            "common_name": b.common_name,
+            "center_wavelength": b.wavelength_um,
+            "gsd": b.gsd
+        }
+
+    m: CollectionMetadata = CollectionMetadata({
+        "cube:dimensions": {
+            "x": {
+                "type": "spatial",
+                "extent": spatial_extent["x"],
+                "reference_system": reference_system
+            },
+            "y": {
+                "type": "spatial",
+                "extent": spatial_extent["y"],
+                "reference_system": reference_system
+            },
+            "t": {
+                "type": "temporal",
+                "extent": temporal_extent
+            },
+            "spectral": {
+                "type": "bands",
+                "values": list(map(lambda band: band.name, bands))
+            }
+        },
+        "summaries": {
+            "eo:bands": list(map(lambda band: get_band_meta_dict(band), bands))
+        }
+    })
+
+    # # Set metadata based on previous metadata with matching spatial and temporal extents
+    # m: CollectionMetadata = deepcopy(cached_cube.metadata)
+
+    # # Set temporal extent
+    # t_dim: TemporalDimension = TemporalDimension("t", temporal_extent)
+    # print(f"t_dim type: {t_dim.type}")
+    # # band dimension already updated in cube
+    # band_dim: BandDimension = m.band_dimension
+    # print(f"band_dim type: {band_dim.type}")
+    # # get x dimension and update extent
+    # x_dim_old: SpatialDimension = filter(lambda dim: dim.name == "x", m.spatial_dimensions).__next__()
+    # x_dim: SpatialDimension = SpatialDimension("x", spatial_extent["x"], x_dim_old.crs, x_dim_old.step)
+    # print(f"x_dim type: {x_dim.type}")
+    # # get y dimension and update extent
+    # y_dim_old: SpatialDimension = filter(lambda dim: dim.name == "y", m.spatial_dimensions).__next__()
+    # y_dim: SpatialDimension = SpatialDimension("y", spatial_extent["y"], y_dim_old.crs, y_dim_old.step)
     
-def get_or_create_cache(
+    # loaded_cube_m: CollectionMetadata = CollectionMetadata(m, dimensions=[t_dim, band_dim, x_dim, y_dim])
+    loaded_cube.metadata = m
+    return loaded_cube
+    
+def get_or_create_cached_cube(
     dc: DataCube,
+    local_cache_file: Path,
+    temporal_extent: List[str],
+    spatial_extent: Dict[str, List[float]],
     job_name: str = "aquamonitor",
     result_format: str = "NetCDF"
 ) -> DataCube:
@@ -238,10 +226,9 @@ def get_or_create_cache(
     Get or create a cache from a DataCube. Data is cached at the current backend and is identified by the
     job title and getting the latest successful job.
     """
-    cache: Optional[DataCube] = get_cache(dc, job_name)
-    if cache:
-        return cache
-    else:
-        job: RESTJob = start_and_wait(dc, job_name, result_format)
-        return dc._connection.load_result(re.sub(r'vito', r'', job.job_id))  # Temp workaround for broken backend
-        
+    dc: DataCube = dc.save_result(format=result_format)
+    job: CachedJob = CachedJob(job_name, local_cache_file, dc._connection, flat_graph=dc.flat_graph())
+    if not job.is_cached:
+        job.start_and_wait()
+
+    return get_cache(dc, job, temporal_extent, spatial_extent)
