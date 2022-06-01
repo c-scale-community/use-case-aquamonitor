@@ -9,7 +9,7 @@ Here the application is ported to an open source workflow, leveraging OpenEO and
 
 ## Architecture
 
-[architecture](./img/C_Scale_Aquamonitor.svg)
+![architecture](./img/C_Scale_Aquamonitor.png)
 
 ## Build docker image
 
