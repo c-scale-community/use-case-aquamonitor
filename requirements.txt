@@ -1,5 +1,5 @@
 jupyterlab
-openeo
+openeo==0.11.0
 hvplot==0.7.3
 matplotlib==3.4.3
 netCDF4==1.5.8

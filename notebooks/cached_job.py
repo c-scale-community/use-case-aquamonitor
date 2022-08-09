@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional
 
 from openeo.rest import OpenEoClientException, OpenEoApiError
 from openeo.rest.connection import Connection
-from openeo.rest.job import RESTJob, JobFailedException
+from openeo.rest.job import BatchJob, JobFailedException
 
 # Initiate logger
 logger = logging.getLogger(__name__)
@@ -22,7 +22,7 @@ ch.setFormatter(formatter)
 logger.addHandler(fh)
 logger.addHandler(ch)
 
-class CachedJob(RESTJob):
+class CachedJob(BatchJob):
     """
     Wrapper around RESTJob that keeps a local cache of the remote jobs, so that we do not have to
     calculate jobs multiple times. Works with job_title being unique per job. Changing job title
@@ -60,15 +60,15 @@ class CachedJob(RESTJob):
                     lambda job: job.get("id") == job_id, connection.list_jobs()
                 )
                 if any(matching_jobs):
-                    super().__init__(job_id, connection)
+                    return super().__init__(job_id, connection)
                 else:
                     raise AttributeError("job id not found in backend.")
                 
             # else we create the job on the backend
             elif flat_graph:
                 logger.info(f"cached job not found in backend, creating a job '{job_title}' in the backend.")
-                job: RESTJob = connection.create_job(process_graph=flat_graph, title=job_title)
-                super().__init__(job.job_id, connection)
+                job: BatchJob = connection.create_job(process_graph=flat_graph, title=job_title)
+                return super().__init__(job.job_id, connection)
             else:
                 raise AttributeError("CachedJob not existing yet on the backend requires either" +
                  "a job_id, or a process_graph")
@@ -118,80 +118,8 @@ class CachedJob(RESTJob):
         """
         starts the job and, polls the job progress.
         """
+        super().start_and_wait(print=logger.info)
+        if self._local_cache_file:
+            self.save()
         
-        def wait(
-            max_poll_interval: int = 60,
-            connection_retry_interval: int = 30,
-            soft_error_max: int = 10,
-            start_time: Optional[datetime] = None
-        ) -> RESTJob:
-            """
-            Poll the job until it is completed. Also use the refresh token if needed.
-            
-            args:
-                max_poll_interval (int): number of seconds that the poll uses at maximum.
-                connection_retry_interval (int): number of seconds to wait after a soft error.
-                soft_error_max (int): maximum number of soft errors to tolerate before timing out.
-                start_time (datetime): time at which the polling starts.
-            """
-            if start_time is None:
-                start_time: datetime = time()
-            # Dirty copy-pasta from python client source code
-            def elapsed() -> str:
-                return str(timedelta(seconds=time() - start_time)).rsplit(".")[0]
-
-            def print_status(msg: str):
-                logger.info("{t} Job {i!r}: {m}".format(t=elapsed(), i=self.job_id, m=msg))
-
-            # Start with fast polling.
-            poll_interval = min(5, max_poll_interval)
-            status = None
-            _soft_error_count = 0
-
-            def soft_error(message: str):
-                """Non breaking error (unless we had too much of them)"""
-                nonlocal _soft_error_count
-                _soft_error_count += 1
-                if _soft_error_count > soft_error_max:
-                    raise OpenEoClientException("Excessive soft errors")
-                print_status(message)
-                sleep(connection_retry_interval)
-
-            while True:
-                # TODO: also allow a hard time limit on this infinite poll loop?
-                try:
-                    job_info = self.describe_job()
-                except ConnectionError as e:
-                    soft_error("Connection error while polling job status: {e}".format(e=e))
-                    continue
-                except OpenEoApiError as e:
-                    if e.http_status_code == 503:
-                        soft_error("Service availability error while polling job status: {e}".format(e=e))
-                        continue
-                    elif e.http_status_code == 403:
-                        self.connection.authenticate_oidc()  # Make sure we do not timeout during the wait
-                    else:
-                        raise
-
-                status = job_info.get("status", "N/A")
-                progress = '{p}%'.format(p=job_info["progress"]) if "progress" in job_info else "N/A"
-                print_status("{s} (progress {p})".format(s=status, p=progress))
-                if status not in ('submitted', 'created', 'queued', 'running'):
-                    break
-
-                # Sleep for next poll (and adaptively make polling less frequent)
-                sleep(poll_interval)
-                poll_interval = min(1.25 * poll_interval, max_poll_interval)
-
-            if status != "finished":
-                raise JobFailedException("Batch job {i} didn't finish properly. Status: {s} (after {t}).".format(
-                    i=self.job_id, s=status, t=elapsed()
-                ), job=self.job_title)
-
-        # dc: DataCube = dc.save_result(format=result_format)  # Add save result step to the end of the graph
-        
-        self.job_id = self.connection.create_job(process_graph=self._flat_graph, title=self._job_title).job_id
-        start_time: datetime = time()
-        self.start_job()
-        wait(start_time=start_time, soft_error_max=50)
-        self.save()
+        return self
