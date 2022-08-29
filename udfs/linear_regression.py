@@ -1,3 +1,4 @@
+from numpy import float64, timedelta64
 from openeo.udf import XarrayDataCube
 from xarray import DataArray, Dataset
 
@@ -21,9 +22,10 @@ def apply_datacube(cube: XarrayDataCube, context: dict) -> XarrayDataCube:
     
     """
     array: DataArray = cube.get_array()
-    fit: Dataset = array.polyfit(dim="t", deg=1)
+    from_ns: float64 = (array.t[1].values - array.t[0].values)  / timedelta64(1, "ns")
+    fit: Dataset = array.polyfit(dim="t", deg=1) * from_ns
     
-    slope: DataSet = fit.isel(degree=1)
+    slope: Dataset = fit.sel(degree=1)
 
     return XarrayDataCube(
         array=DataArray(slope["polyfit_coefficients"]) # , dims=slope.dims, coords=slope.coords)

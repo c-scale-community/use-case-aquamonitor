@@ -34,7 +34,8 @@ class CachedJob(BatchJob):
         local_cache_file: Path,
         connection: Connection,
         job_id: Optional[str] = None,
-        flat_graph: Optional[Dict[str, Any]] = None
+        flat_graph: Optional[Dict[str, Any]] = None,
+        recalculate: bool = False
     ):
         self._job_title = job_title
         self._local_cache_file = local_cache_file
@@ -48,7 +49,7 @@ class CachedJob(BatchJob):
             logger.info(f"logging file not found, creates a local log file at {str(local_cache_file)} when saving.")
             self._job_cache: Dict[str, str] = {}
         # check if job was cached
-        if job_title in self._job_cache.keys():
+        if job_title in self._job_cache.keys() and not recalculate:
             super().__init__(self._job_cache[job_title], connection)
             self._is_cached = True
         else:
@@ -92,7 +93,7 @@ class CachedJob(BatchJob):
     @property
     def job_cache(self) -> str:
         return self._job_cache
-    
+
     @property
     def job_title(self) -> str:
         return self._job_title
