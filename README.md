@@ -1,6 +1,5 @@
 # use-case-aquamonitor
 
-
 With this notebook a user can easily deploy a workflow that produces satellite derived land surface changes for a geographic area of interest. The resultant output of the workflow visualises where surface water has become land (due to accretion, land reclamation, droughts) or vice versa where land has become surface water (due to erosion, reservoir construction).
 
 The service is based on the paper by Donchyts et al. (2016): "Earth's surface water change over the past 30 years". More information about the application can be found at https://www.deltares.nl/en/software/aqua-monitor/. And a Google Earth Engine implementation of the application can be found at https://aqua-monitor.appspot.com/
