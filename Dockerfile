@@ -2,7 +2,7 @@ FROM jupyter/minimal-notebook:lab-3.2.5
 
 COPY ./environment.yaml ${HOME}/environment.yaml
 
-RUN conda env update --name base --file environment.yaml --prune
+RUN mamba env update --name base --file environment.yaml --prune
 RUN jupyter labextension install \
     jupyterlab-system-monitor \
     jupyterlab-topbar-extension \

@@ -58,7 +58,7 @@ def get_or_create_results(
     
     results: Optional[JobResults] = None
     dc: DataCube = dc.save_result(format=result_format)  # add save result to backend
-    job: CachedJob = CachedJob(job_name, local_cache_file, connection=dc._connection, flat_graph=dc.flat_graph())
+    job: CachedJob = CachedJob(job_name, local_cache_file, connection=dc._connection, flat_graph=dc.flat_graph(), recalculate=recalculate)
     if not recalculate:
         if job.status() == "finished":
             results: JobResults = job.get_results()
@@ -73,7 +73,7 @@ def get_files_from_dc(
     out_directory: Path,
     job_name: str = "aquamonitor",
     result_format: str = "NetCDF",
-    recalculate: bool = True,
+    recalculate: bool = False,
     local_cache_file: Optional[Path] = None
 ) -> List[Path]:
     """

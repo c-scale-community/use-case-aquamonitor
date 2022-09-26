@@ -16,4 +16,4 @@ dependencies:
   - rioxarray
   - shapely<1.8.0  # No warnings for cartopy
   - pip:
-    - openeo
+    - openeo==0.11.0
