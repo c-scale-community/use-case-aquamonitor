@@ -1,13 +1,18 @@
-name: py37
+name: aquamonitor
 channels:
   - conda-forge
   - pyviz
 dependencies:
+  - python=3.7.*
   - cartopy
   - geoviews
   - hvplot
   - jupyterlab
-  - matplotlib
+   # for binder
+  - jupyterhub-singleuser
+  - jupyter_client
+  - jupyter_server
+  - matplotlib-base
   - netCDF4=1.5.8
   - pandas=1.3.*
   - pip
