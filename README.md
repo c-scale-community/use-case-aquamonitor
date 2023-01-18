@@ -10,18 +10,18 @@ Here the application is ported to an open source workflow, leveraging OpenEO and
 
 ![architecture](./img/C_Scale_Aquamonitor.png)
 
-## Build docker image
+## Local Docker Image
+You can either use binder, or build a notebook image locally
 
+to build:
 ```
-docker build -t aquamonitor .
+docker build -t aquamonitor docker
 ```
 
-## Run docker container
+to run:
 ```
 docker run -p 8888:8888 -v $(pwd):/home/jovyan/work aquamonitor
 ```
-
-## Run Notebook
 
 Copy the output from the docker run command in your browser:
 http://127.0.0.1:8888/?token=xxx
